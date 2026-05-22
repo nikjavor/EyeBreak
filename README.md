@@ -35,14 +35,10 @@ EyeBreak is a macOS app that helps reduce eye strain by reminding you to take re
 3. Run the build script:
 
 ```bash
-./build.sh
+chmod +x build.sh && ./build.sh && mv EyeBreak.app /Applications/
 ```
 
-4. The script will create EyeBreak.app in the current directory
-5. You can move it to your Applications folder with:
-```bash
-mv EyeBreak.app /Applications/
-```
+4. The script will create EyeBreak.app and move it into Applications folder
 
 ## Customizing
 
