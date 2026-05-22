@@ -14,6 +14,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     var isOnBreak = false
     var menuIsOpen = false
     var menuUpdateTimer: Timer?
+    var statusUpdateTimer: Timer?
     
     private var selfReference: AppDelegate?
     private var nextBreakDate: Date?
@@ -41,6 +42,10 @@ class AppDelegate: NSObject, NSApplicationDelegate {
                                                          name: NSWorkspace.didWakeNotification,
                                                        object: nil)
         
+        let statusTimer = Timer(timeInterval: 1.0, target: self, selector: #selector(updateStatusBarTitle), userInfo: nil, repeats: true)
+        RunLoop.main.add(statusTimer, forMode: .common)
+        statusUpdateTimer = statusTimer
+        
         // Schedule the first break trigger
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { [weak self] in
             self?.scheduleNextBreak()
@@ -58,7 +63,23 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         breakWorkItem?.cancel()
         menuUpdateTimer?.invalidate()
         nextBreakTimer?.invalidate()
+        statusUpdateTimer?.invalidate()
         selfReference = nil
+    }
+    
+    @objc func updateStatusBarTitle() {
+        guard let button = statusItem?.button else { return }
+        if isOnBreak {
+            button.title = "👀"
+            return
+        }
+        let remaining = nextBreakDate?.timeIntervalSinceNow ?? 0
+        if remaining <= 0 || remaining > 24 * 60 * 60 {
+            button.title = "👀"
+            return
+        }
+        let minutes = Int(ceil(remaining / 60.0))
+        button.title = "👀\(minutes)m"
     }
     
     // --- Menu Handling ---
@@ -189,6 +210,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     func startBreak() {
         isOnBreak = true
         nextBreakWorkItem = nil
+        updateStatusBarTitle()
         print("AppDelegate: Break started.")
         
         // Always create a fresh BreakView and replace the window's contentView
@@ -283,6 +305,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         RunLoop.main.add(timer, forMode: .common)
         nextBreakTimer = timer
         updateMenuTimeDisplay()
+        updateStatusBarTitle()
     }
 
     private func adjustNextBreak(by seconds: Int) {
