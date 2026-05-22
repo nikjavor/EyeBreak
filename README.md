@@ -38,7 +38,7 @@ EyeBreak is a macOS app that helps reduce eye strain by reminding you to take re
 chmod +x build.sh && ./build.sh && mv EyeBreak.app /Applications/
 ```
 
-4. The script will create EyeBreak.app and move it into Applications folder
+4. The command will run a script that will create EyeBreak.app and move it into Applications folder
 
 ## Customizing
 
