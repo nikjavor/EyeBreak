@@ -79,7 +79,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             return
         }
         let minutes = Int(ceil(remaining / 60.0))
-        button.title = "👀\(minutes)m"
+        button.title = "👀 \(minutes)m"
     }
     
     // --- Menu Handling ---
