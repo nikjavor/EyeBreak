@@ -8,7 +8,7 @@ let delegate = AppDelegate()
 
 class AppDelegate: NSObject, NSApplicationDelegate {
     var statusItem: NSStatusItem?
-    var breakWindow: NSWindow?
+    var breakWindows: [NSWindow] = []
     var timeUntilBreak = 20 * 60 // 20 minutes until next break
     var breakDuration = 30 // 30-second break
     var isOnBreak = false
@@ -190,18 +190,23 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         isOnBreak = true
         nextBreakWorkItem = nil
         print("AppDelegate: Break started.")
-        
-        // Always create a fresh BreakView and replace the window's contentView
-        let breakView = BreakView(remainingSeconds: breakDuration)
-        let containerView = BreakViewContainer(breakView: breakView) { [weak self] in
+
+        for window in breakWindows {
+            window.orderOut(nil)
+        }
+        breakWindows.removeAll()
+
+        let sharedBreakView = BreakView(remainingSeconds: breakDuration)
+        let containerView = BreakViewContainer(breakView: sharedBreakView) { [weak self] in
             print("AppDelegate: Skip pressed; triggering endBreak.")
             self?.endBreak()
         }
-        // If window doesn't exist yet, create and configure it
-        if breakWindow == nil {
-            print("AppDelegate: Creating break window for first time.")
+
+        let screens = NSScreen.screens
+        print("AppDelegate: Creating break windows for \(screens.count) screen(s).")
+        for screen in screens {
             let window = NSWindow(
-                contentRect: NSRect(x: 0, y: 0, width: 800, height: 600),
+                contentRect: screen.frame,
                 styleMask: .borderless,
                 backing: .buffered,
                 defer: false
@@ -210,24 +215,19 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             window.isOpaque = false
             window.hasShadow = false
             window.level = .screenSaver
-            if let screen = NSScreen.main {
-                window.setFrame(screen.frame, display: true)
-            }
-            breakWindow = window
+            window.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary]
+            window.setFrame(screen.frame, display: true)
+            window.contentView = NSHostingView(rootView: containerView)
+            window.alphaValue = 0
+            window.makeKeyAndOrderFront(nil)
+            NSAnimationContext.runAnimationGroup({ context in
+                context.duration = 0.5
+                window.animator().alphaValue = 1
+            })
+            breakWindows.append(window)
         }
-        guard let window = breakWindow else { return }
-        // Replace contentView with new BreakView
-        window.contentView = NSHostingView(rootView: containerView)
-        window.makeKeyAndOrderFront(nil)
-        print("AppDelegate: Showing break window with new content.")
-        // Fade-in animation
-        window.alphaValue = 0
-        NSAnimationContext.runAnimationGroup({ context in
-            context.duration = 0.5
-            window.animator().alphaValue = 1
-        })
-        print("AppDelegate: Break window fade-in started.")
-        
+        print("AppDelegate: Break window fade-in started on all screens.")
+
         // Schedule end of break
         breakWorkItem?.cancel()
         let work = DispatchWorkItem { [weak self] in
@@ -241,10 +241,11 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     func endBreak() {
         isOnBreak = false
         print("AppDelegate: Break ended.")
-        // Hide the break window
-        breakWindow?.orderOut(nil)
+        for window in breakWindows {
+            window.orderOut(nil)
+        }
+        breakWindows.removeAll()
         print("AppDelegate: Break cleanup complete. Scheduling next break.")
-        // Schedule next break after cleanup
         scheduleNextBreak()
     }
     
