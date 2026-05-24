@@ -2,15 +2,46 @@ import Cocoa
 import SwiftUI
 import Combine
 
-// Create a strong top-level reference to prevent the app from closing
+enum Settings {
+    private static let intervalKey = "breakIntervalSeconds"
+    private static let durationKey = "breakDurationSeconds"
+
+    static let defaultInterval = 20 * 60
+    static let defaultDuration = 30
+
+    static let intervalRange = 60...7200
+    static let durationRange = 5...600
+
+    static let didChangeNotification = Notification.Name("EyeBreakSettingsDidChange")
+
+    static var breakIntervalSeconds: Int {
+        let stored = UserDefaults.standard.integer(forKey: intervalKey)
+        return stored == 0 ? defaultInterval : stored
+    }
+
+    static var breakDurationSeconds: Int {
+        let stored = UserDefaults.standard.integer(forKey: durationKey)
+        return stored == 0 ? defaultDuration : stored
+    }
+
+    static func save(intervalSeconds: Int, durationSeconds: Int) {
+        let clampedInterval = min(max(intervalSeconds, intervalRange.lowerBound), intervalRange.upperBound)
+        let clampedDuration = min(max(durationSeconds, durationRange.lowerBound), durationRange.upperBound)
+        UserDefaults.standard.set(clampedInterval, forKey: intervalKey)
+        UserDefaults.standard.set(clampedDuration, forKey: durationKey)
+        NotificationCenter.default.post(name: didChangeNotification, object: nil)
+    }
+}
+
 let app = NSApplication.shared
 let delegate = AppDelegate()
 
 class AppDelegate: NSObject, NSApplicationDelegate {
     var statusItem: NSStatusItem?
     var breakWindow: NSWindow?
-    var timeUntilBreak = 20 * 60 // 20 minutes until next break
-    var breakDuration = 30 // 30-second break
+    var settingsWindowController: NSWindowController?
+    var timeUntilBreak = Settings.breakIntervalSeconds
+    var breakDuration = Settings.breakDurationSeconds
     var isOnBreak = false
     var menuIsOpen = false
     var menuUpdateTimer: Timer?
@@ -35,6 +66,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         
         NotificationCenter.default.addObserver(self, selector: #selector(menuWillOpen(_:)), name: NSMenu.didBeginTrackingNotification, object: nil)
         NotificationCenter.default.addObserver(self, selector: #selector(menuDidClose(_:)), name: NSMenu.didEndTrackingNotification, object: nil)
+        NotificationCenter.default.addObserver(self, selector: #selector(handleSettingsChange(_:)), name: Settings.didChangeNotification, object: nil)
         // Listen for system wake to reschedule the break timer
         NSWorkspace.shared.notificationCenter.addObserver(self,
                                                          selector: #selector(handleWake(_:)),
@@ -137,10 +169,45 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     }
     
     @objc func showSettings() {
-        let alert = NSAlert()
-        alert.messageText = "Settings"
-        alert.informativeText = "Settings would go here in a real app."
-        alert.runModal()
+        if let controller = settingsWindowController {
+            NSApp.activate(ignoringOtherApps: true)
+            controller.window?.makeKeyAndOrderFront(nil)
+            return
+        }
+
+        let view = SettingsView(
+            intervalSeconds: Settings.breakIntervalSeconds,
+            durationSeconds: Settings.breakDurationSeconds,
+            onSave: { [weak self] interval, duration in
+                Settings.save(intervalSeconds: interval, durationSeconds: duration)
+                self?.settingsWindowController?.close()
+            },
+            onCancel: { [weak self] in
+                self?.settingsWindowController?.close()
+            }
+        )
+
+        let hosting = NSHostingController(rootView: view)
+        let window = NSWindow(contentViewController: hosting)
+        window.styleMask = [.titled, .closable]
+        window.title = "Settings"
+        window.isReleasedWhenClosed = false
+        window.level = .floating
+        window.center()
+
+        let controller = NSWindowController(window: window)
+        settingsWindowController = controller
+
+        NotificationCenter.default.addObserver(
+            forName: NSWindow.willCloseNotification,
+            object: window,
+            queue: .main
+        ) { [weak self] _ in
+            self?.settingsWindowController = nil
+        }
+
+        NSApp.activate(ignoringOtherApps: true)
+        controller.showWindow(nil)
     }
     
     @objc func stopApp() {
@@ -181,14 +248,14 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     
     @objc func skipNextBreak() {
         print("AppDelegate: skipNextBreak called.")
-        timeUntilBreak = 20 * 60 // Reset to 20 minutes
-        updateMenuTimeDisplay()
+        scheduleBreak(in: Settings.breakIntervalSeconds)
     }
     
     // Triggered when it's time to start a break
     func startBreak() {
         isOnBreak = true
         nextBreakWorkItem = nil
+        breakDuration = Settings.breakDurationSeconds
         print("AppDelegate: Break started.")
         
         // Always create a fresh BreakView and replace the window's contentView
@@ -291,7 +358,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     private func scheduleNextBreak() {
-        scheduleBreak(in: 20 * 60)
+        scheduleBreak(in: Settings.breakIntervalSeconds)
     }
     
     @objc private func nextBreakTimerFired() {
@@ -301,6 +368,16 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         startBreak()
     }
     
+    @objc func handleSettingsChange(_ notification: Notification) {
+        breakDuration = Settings.breakDurationSeconds
+        guard !isOnBreak else {
+            print("AppDelegate: settings changed during break; will apply on next schedule.")
+            return
+        }
+        print("AppDelegate: settings changed; restarting countdown with new interval.")
+        scheduleBreak(in: Settings.breakIntervalSeconds)
+    }
+
     @objc func handleWake(_ notification: Notification) {
         print("AppDelegate: system woke up, rescheduling break")
         guard let nextDate = nextBreakDate else {
@@ -415,6 +492,77 @@ class BreakView: ObservableObject {
     }
 }
 
-// Initialize app
+struct SettingsView: View {
+    @State private var intervalMinutes: Int
+    @State private var durationSeconds: Int
+
+    var onSave: (Int, Int) -> Void
+    var onCancel: () -> Void
+
+    private let intervalMin = Settings.intervalRange.lowerBound / 60
+    private let intervalMax = Settings.intervalRange.upperBound / 60
+    private let durationMin = Settings.durationRange.lowerBound
+    private let durationMax = Settings.durationRange.upperBound
+
+    init(intervalSeconds: Int, durationSeconds: Int, onSave: @escaping (Int, Int) -> Void, onCancel: @escaping () -> Void) {
+        _intervalMinutes = State(initialValue: max(1, intervalSeconds / 60))
+        _durationSeconds = State(initialValue: durationSeconds)
+        self.onSave = onSave
+        self.onCancel = onCancel
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 20) {
+            Text("EyeBreak Settings")
+                .font(.title2)
+                .bold()
+
+            HStack {
+                Text("Break every")
+                    .frame(width: 110, alignment: .leading)
+                TextField("", value: $intervalMinutes, formatter: Self.numberFormatter)
+                    .frame(width: 60)
+                    .textFieldStyle(RoundedBorderTextFieldStyle())
+                Stepper("", value: $intervalMinutes, in: intervalMin...intervalMax)
+                    .labelsHidden()
+                Text("minutes")
+            }
+
+            HStack {
+                Text("Break length")
+                    .frame(width: 110, alignment: .leading)
+                TextField("", value: $durationSeconds, formatter: Self.numberFormatter)
+                    .frame(width: 60)
+                    .textFieldStyle(RoundedBorderTextFieldStyle())
+                Stepper("", value: $durationSeconds, in: durationMin...durationMax, step: 5)
+                    .labelsHidden()
+                Text("seconds")
+            }
+
+            HStack {
+                Spacer()
+                Button("Cancel", action: onCancel)
+                    .keyboardShortcut(.cancelAction)
+                Button("Save") {
+                    let clampedInterval = min(max(intervalMinutes, intervalMin), intervalMax) * 60
+                    let clampedDuration = min(max(durationSeconds, durationMin), durationMax)
+                    onSave(clampedInterval, clampedDuration)
+                }
+                .keyboardShortcut(.defaultAction)
+            }
+        }
+        .padding(24)
+        .frame(width: 360)
+    }
+
+    private static let numberFormatter: NumberFormatter = {
+        let f = NumberFormatter()
+        f.numberStyle = .none
+        f.minimum = 1
+        f.maximum = 7200
+        return f
+    }()
+}
+
 app.delegate = delegate
 app.run() 
